@@ -4,6 +4,7 @@ import time
 from tqdm import tqdm
 from threading import Thread
 import sys
+import os
 from collections import defaultdict
 import curses
 import threading
