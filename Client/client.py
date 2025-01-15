@@ -6,7 +6,6 @@ from threading import Thread
 import sys
 import os
 from collections import defaultdict
-import curses
 import threading
 
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '../')))
@@ -16,7 +15,7 @@ from Shared.shared import *
 def listen_for_offers():
     """Listen for server offers via UDP."""
     udp_socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-    udp_socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEPORT, 1)
+    udp_socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
     udp_socket.bind(('', DEFAULT_UDP_PORT))
 
     print(f"{bcolors.OKCYAN}Listening for server offers...{bcolors.ENDC}")
@@ -39,7 +38,7 @@ def perform_tcp_connection(server_ip, tcp_port, file_size, connection_id, stats)
             tcp_socket.sendall(f"{file_size}\n".encode('utf-8'))
 
             received = 0
-            progress = tqdm(total=file_size, unit='B', unit_scale=True, desc=f"TCP {connection_id}")
+            progress = tqdm(total=file_size, unit='B', unit_scale=True, desc=f"TCP {connection_id}{bcolors.ENDC}")
             while received < file_size:
                 data = tcp_socket.recv(BUFFER_SIZE)
                 received += len(data)
@@ -63,21 +62,24 @@ def perform_udp_connection(server_ip, udp_port, file_size, connection_id, stats)
     udp_socket.sendto(request_packet, (server_ip, udp_port))
 
     received_segments = 0
-    total_segments = (file_size + BUFFER_SIZE - 1) // BUFFER_SIZE
+    total_segments = (file_size + BUFFER_SIZE - 21 -  1) // (BUFFER_SIZE-21)
     missing_segments = set(range(total_segments))
     start_time = time.time()
 
-    progress = tqdm(total=file_size, unit='B', unit_scale=True, desc=f"UDP {connection_id}")
+    progress = tqdm(total=file_size, unit='B', unit_scale=True, desc=f"UDP {connection_id}{bcolors.ENDC}")
     while True:
         try:
-            data, _ = udp_socket.recvfrom(BUFFER_SIZE + 20)
-            magic_cookie, message_type, total_segments, segment_number = struct.unpack(PAYLOAD_FORMAT, data[:21])
+            data, _ = udp_socket.recvfrom(BUFFER_SIZE)
+            header = data[:21]
+            payload = data[21:]
+
+            magic_cookie, message_type, total_segments, segment_number = struct.unpack(PAYLOAD_FORMAT, header)
             if magic_cookie == MAGIC_COOKIE and message_type == MESSAGE_TYPE_PAYLOAD:
                 if segment_number in missing_segments:
                     received_segments += 1
                     missing_segments.remove(segment_number)
-                progress.update(BUFFER_SIZE)
-                stats['total_bytes'] += BUFFER_SIZE
+                progress.update(len(payload) )
+                stats['total_bytes'] += len(payload)
         except socket.timeout:
             break
 
@@ -86,7 +88,7 @@ def perform_udp_connection(server_ip, udp_port, file_size, connection_id, stats)
     elapsed_time = time.time() - start_time
     stats['elapsed_time'] += elapsed_time
     success_rate = (received_segments / total_segments) * 100 if total_segments else 0
-    speed = (received_segments * BUFFER_SIZE * 8) / elapsed_time
+    speed = (received_segments * (BUFFER_SIZE -21) * 8) / elapsed_time
     print(f"{bcolors.OKBLUE}UDP {connection_id} Complete: Time: {elapsed_time:.2f}s, Speed: {speed:.2f} bits/s, Success Rate: {success_rate:.2f}%{bcolors.ENDC}")
 
 def monitor_stats(stats, active_transfers):
