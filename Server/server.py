@@ -22,7 +22,7 @@ def broadcast_offers():
     while True:
         udp_socket.sendto(offer_packet, ('172.20.10.15', DEFAULT_UDP_PORT))
         # print(f"{bcolors.OKCYAN}Broadcasting offer...{bcolors.ENDC}")
-        time.sleep(1)
+        time.sleep(2)
 
 def handle_tcp_connection(conn, addr):
     """Handle incoming TCP requests."""
@@ -117,12 +117,12 @@ def display_logo():
     """Displays the PairNet logo on the CLI."""
     logo = f"""
     {bcolors.OKCYAN}
-    ██████╗  █████╗ ██╗ ██████╗ ███╗   ██╗███████╗
-    ██╔══██╗██╔══██╗██║ ██╔══██╗████╗  ██║██╔════╝
-    ██████╔╝███████║██║ ██║  ██║██╔██╗ ██║███████╗
-    ██╔═══╝ ██╔══██║██║ ██║  ██║██║╚██╗██║╚════██║
-    ██║     ██║  ██║██║ ██████╔╝██║ ╚████║███████║
-    ╚═╝     ╚═╝  ╚═╝╚═╝ ╚═════╝ ╚═╝  ╚═══╝╚══════╝
+████████╗██╗  ██╗███████╗     ██╗ ██████╗ ██╗ ██╗        
+╚══██╔══╝██║  ██║██╔════╝    ███║██╔═████╗╚═╝██╔╝        
+   ██║   ███████║█████╗      ╚██║██║██╔██║  ██╔╝         
+   ██║   ██╔══██║██╔══╝       ██║████╔╝██║ ██╔╝          
+   ██║   ██║  ██║███████╗     ██║╚██████╔╝██╔╝██╗        
+   ╚═╝   ╚═╝  ╚═╝╚══════╝     ╚═╝ ╚═════╝ ╚═╝ ╚═╝
     {bcolors.ENDC}
     """
     print(logo)
