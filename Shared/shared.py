@@ -25,9 +25,9 @@ DEFAULT_TCP_PORT = 12345
 BUFFER_SIZE = 1024
 
 # Packet Formats
-OFFER_FORMAT = "!IBHH"  # Magic cookie, message type, UDP port, TCP port
-REQUEST_FORMAT = "!IBQ"  # Magic Cookie (4 bytes), Message Type (1 byte), File Size (8 bytes)
-PAYLOAD_FORMAT = "!IBQQ"  # Magic cookie, message type, total segments, current segment
+OFFER_FORMAT    = "!IBHH"      # Magic cookie, message type, UDP port, TCP port
+REQUEST_FORMAT  = "!IBQ"     # Magic Cookie (4 bytes), Message Type (1 byte), File Size (8 bytes)
+PAYLOAD_FORMAT  = "!IBQQ"    # Magic cookie, message type, total segments, current segment
 
 # Timeouts
 UDP_TIMEOUT = 1  # 1 second timeout for UDP transfers
