@@ -1,132 +1,146 @@
-# Server Implementation with ThreadPool
-
 import socket
-from concurrent.futures import ThreadPoolExecutor
-import threading
 import struct
 import time
+from tqdm import tqdm
+from threading import Thread
 import sys
 import os
+from collections import defaultdict
+import threading
+
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '../')))
 from Shared.shared import *
 
 
-
-def broadcast_offers():
-    """Broadcast UDP offers to clients."""
-    udp_socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-    udp_socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-    udp_socket.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
-    offer_packet = struct.pack(OFFER_FORMAT, MAGIC_COOKIE, MESSAGE_TYPE_OFFER, DEFAULT_UDP_PORT, DEFAULT_TCP_PORT)
-
-    while True:
-        udp_socket.sendto(offer_packet, ('172.20.10.15', DEFAULT_UDP_PORT))
-        # print(f"{bcolors.OKCYAN}Broadcasting offer...{bcolors.ENDC}")
-        time.sleep(2)
-
-def handle_tcp_connection(conn, addr):
-    """Handle incoming TCP requests."""
-    try:
-        data = conn.recv(BUFFER_SIZE).decode('utf-8').strip()
-        requested_size = int(data)
-        print(f"{bcolors.OKBLUE}TCP Request from {addr}: {requested_size} bytes{bcolors.ENDC}")
-
-        total_sent = 0
-        while total_sent < requested_size:
-            chunk_size = min(BUFFER_SIZE, requested_size - total_sent)
-            conn.send(b'X' * chunk_size)
-            total_sent += chunk_size
-
-        print(f"{bcolors.OKGREEN}Sent {total_sent} bytes to {addr} via TCP{bcolors.ENDC}")
-    except Exception as e:
-        print(f"{bcolors.FAIL}Error in TCP connection: {e}{bcolors.ENDC}")
-    finally:
-        conn.close()
-
-def handle_udp_request(udp_socket, client_addr, requested_size):
-    """Handle incoming UDP requests."""
-
-    max_payload_size = BUFFER_SIZE -21
-    total_segments = (requested_size + max_payload_size - 1) // max_payload_size
-
-    for segment_number in range(total_segments):
-        payload_size = min(max_payload_size, requested_size - (segment_number * max_payload_size))
-        payload_packet = struct.pack(
-            PAYLOAD_FORMAT,
-            MAGIC_COOKIE,
-            MESSAGE_TYPE_PAYLOAD,
-            total_segments,
-            segment_number
-        ) + b'X' * payload_size
-
-
-        udp_socket.sendto(payload_packet, client_addr)
-        print(f"{bcolors.OKCYAN}Sent segment {segment_number + 1}/{total_segments} to {client_addr}{bcolors.ENDC}")
-
-def handle_udp_connections():
-    """Listen for UDP requests and respond to clients."""
+def listen_for_offers():
+    """Listen for server offers via UDP."""
     udp_socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     udp_socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
     udp_socket.bind(('', DEFAULT_UDP_PORT))
-    
-    hostname = socket.gethostname()
-    local_ip = socket.gethostbyname(hostname)
 
-    print(f"{bcolors.OKCYAN}Listening for UDP connections on {local_ip}:{DEFAULT_UDP_PORT}...{bcolors.ENDC}")
-
+    print(f"{bcolors.OKCYAN}Listening for server offers...{bcolors.ENDC}")
     while True:
         try:
             data, addr = udp_socket.recvfrom(BUFFER_SIZE)
-
-            if addr[0] == local_ip:
-                continue
-
-            if len(data) < 13:
-                continue
-
-            magic_cookie, message_type, file_size = struct.unpack(REQUEST_FORMAT, data)
-            if magic_cookie == MAGIC_COOKIE and message_type == MESSAGE_TYPE_REQUEST:
-                print(f"{bcolors.OKCYAN}Valid UDP request from {addr}: {file_size} bytes{bcolors.ENDC}")
-                handle_udp_request(udp_socket, addr, file_size)
-            else:
-                print(f"{bcolors.WARNING}Invalid packet content from {addr}{bcolors.ENDC}")
-        except struct.error as e:
-            print(f"{bcolors.FAIL}Error unpacking UDP request: {e}{bcolors.ENDC}")
+            magic_cookie, message_type, udp_port, tcp_port = struct.unpack(OFFER_FORMAT, data)
+            if magic_cookie == MAGIC_COOKIE and message_type == MESSAGE_TYPE_OFFER:
+                print(f"{bcolors.OKGREEN}Offer received from {addr[0]}: UDP Port {udp_port}, TCP Port {tcp_port}{bcolors.ENDC}")
+                return addr[0], udp_port, tcp_port
         except Exception as e:
-            print(f"{bcolors.FAIL}Unexpected error: {e}{bcolors.ENDC}")
+            print(f"{bcolors.FAIL}Error listening for offers: {e}{bcolors.ENDC}")
 
-def start_server():
-    """Start the server."""
-    display_logo()
-    thread_pool = ThreadPoolExecutor(max_workers=10)
+def perform_tcp_connection(server_ip, tcp_port, file_size, connection_id, stats):
+    """Perform a TCP file transfer."""
+    try:
+        start_time = time.time()
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as tcp_socket:
+            tcp_socket.connect((server_ip, tcp_port))
+            tcp_socket.sendall(f"{file_size}\n".encode('utf-8'))
 
-    threading.Thread(target=broadcast_offers, daemon=True).start()
-    threading.Thread(target=handle_udp_connections, daemon=True).start()
+            received = 0
+            progress = tqdm(total=file_size, unit='B', unit_scale=True, desc=f"TCP {connection_id}{bcolors.ENDC}")
+            while received < file_size:
+                data = tcp_socket.recv(BUFFER_SIZE)
+                received += len(data)
+                progress.update(len(data))
+                stats['total_bytes'] += len(data)
+            progress.close()
 
-    tcp_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    tcp_socket.bind(('', DEFAULT_TCP_PORT))
-    tcp_socket.listen()
-    print(f"{bcolors.HEADER}Server listening on UDP port {DEFAULT_UDP_PORT}{bcolors.ENDC}")
-    print(f"{bcolors.HEADER}Server listening on TCP port {DEFAULT_TCP_PORT}{bcolors.ENDC}")
+        elapsed_time = time.time() - start_time
+        stats['elapsed_time'] += elapsed_time
+        speed = (file_size * 8) / elapsed_time
+        print(f"{bcolors.OKGREEN}TCP {connection_id} Complete: Time: {elapsed_time:.2f}s, Speed: {speed:.2f} bits/s{bcolors.ENDC}")
+    except Exception as e:
+        print(f"{bcolors.FAIL}Error during TCP {connection_id}: {e}{bcolors.ENDC}")
 
+def perform_udp_connection(server_ip, udp_port, file_size, connection_id, stats):
+    """Perform a UDP file transfer."""
+    udp_socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    udp_socket.settimeout(UDP_TIMEOUT)
+
+    request_packet = struct.pack(REQUEST_FORMAT, MAGIC_COOKIE, MESSAGE_TYPE_REQUEST, file_size)
+    udp_socket.sendto(request_packet, (server_ip, udp_port))
+
+    received_segments = 0
+    total_segments = (file_size + BUFFER_SIZE - 21 -  1) // (BUFFER_SIZE-21)
+    missing_segments = set(range(total_segments))
+    start_time = time.time()
+
+    progress = tqdm(total=file_size, unit='B', unit_scale=True, desc=f"UDP {connection_id}{bcolors.ENDC}")
     while True:
-        conn, addr = tcp_socket.accept()
-        thread_pool.submit(handle_tcp_connection, conn, addr)
+        try:
+            data, _ = udp_socket.recvfrom(BUFFER_SIZE)
+            header = data[:21]
+            payload = data[21:]
 
-def display_logo():
-    """Displays the PairNet logo on the CLI."""
-    logo = f"""
-    {bcolors.OKCYAN}
-████████╗██╗  ██╗███████╗     ██╗ ██████╗ ██╗ ██╗        
-╚══██╔══╝██║  ██║██╔════╝    ███║██╔═████╗╚═╝██╔╝        
-   ██║   ███████║█████╗      ╚██║██║██╔██║  ██╔╝         
-   ██║   ██╔══██║██╔══╝       ██║████╔╝██║ ██╔╝          
-   ██║   ██║  ██║███████╗     ██║╚██████╔╝██╔╝██╗        
-   ╚═╝   ╚═╝  ╚═╝╚══════╝     ╚═╝ ╚═════╝ ╚═╝ ╚═╝
-    {bcolors.ENDC}
-    """
-    print(logo)
+            magic_cookie, message_type, total_segments, segment_number = struct.unpack(PAYLOAD_FORMAT, header)
+            if magic_cookie == MAGIC_COOKIE and message_type == MESSAGE_TYPE_PAYLOAD:
+                if segment_number in missing_segments:
+                    received_segments += 1
+                    missing_segments.remove(segment_number)
+                progress.update(len(payload) )
+                stats['total_bytes'] += len(payload)
+        except socket.timeout:
+            break
+
+    progress.close()
+
+    elapsed_time = time.time() - start_time
+    stats['elapsed_time'] += elapsed_time
+    success_rate = (received_segments / total_segments) * 100 if total_segments else 0
+    speed = (received_segments * (BUFFER_SIZE -21) * 8) / elapsed_time
+    print(f"{bcolors.OKBLUE}UDP {connection_id} Complete: Time: {elapsed_time:.2f}s, Speed: {speed:.2f} bits/s, Success Rate: {success_rate:.2f}%{bcolors.ENDC}")
+
+def monitor_stats(stats, active_transfers):
+    """Continuously display real-time stats."""
+    while active_transfers.is_set():
+        speed = (stats['total_bytes'] * 8) / max(1, stats['elapsed_time'])
+        print(f"{bcolors.OKGREEN}Real-Time Stats: Speed: {speed:.2f} bits/s, Bytes Transferred: {stats['total_bytes']}{bcolors.ENDC}", end="\r")
+        time.sleep(1)
+
+def main():
+    server_ip, udp_port, tcp_port = listen_for_offers()
+
+    # Prompt user for details
+    file_size = int(input(f"{bcolors.HEADER}Enter file size (bytes): {bcolors.ENDC}"))
+    tcp_connections = int(input(f"{bcolors.HEADER}Enter number of TCP connections: {bcolors.ENDC}"))
+    udp_connections = int(input(f"{bcolors.HEADER}Enter number of UDP connections: {bcolors.ENDC}"))
+
+    # Shared stats for monitoring
+    stats = {'total_bytes': 0, 'elapsed_time': 0}
+    active_transfers = threading.Event()
+    active_transfers.set()
+
+    # Start real-time monitoring
+    monitor_thread = threading.Thread(target=monitor_stats, args=(stats, active_transfers))
+    monitor_thread.start()
+
+    # Perform TCP and UDP connections
+    threads = []
+
+    # Start TCP connections
+    for i in range(tcp_connections):
+        thread = Thread(target=perform_tcp_connection, args=(server_ip, tcp_port, file_size, i + 1, stats))
+        thread.start()
+        threads.append(thread)
+
+    # Start UDP connections
+    for i in range(udp_connections):
+        thread = Thread(target=perform_udp_connection, args=(server_ip, udp_port, file_size, i + 1, stats))
+        thread.start()
+        threads.append(thread)
+
+    # Wait for all threads to complete
+    for thread in threads:
+        thread.join()
+
+    # Stop monitoring
+    active_transfers.clear()
+    monitor_thread.join()
+
+    print(f"{bcolors.OKGREEN}All transfers complete.{bcolors.ENDC}")
+
+    print(f"{bcolors.OKGREEN}All transfers complete.{bcolors.ENDC}")
 
 if __name__ == "__main__":
-    print(f"{bcolors.OKGREEN}Starting server...{bcolors.ENDC}")
-    start_server()
+    main()
